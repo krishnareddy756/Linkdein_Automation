@@ -1,0 +1,23 @@
+{
+  "name": "linkedin-playwright-automation",
+  "version": "1.0.0",
+  "description": "LinkedIn automation script using Playwright for learning purposes",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "node --watch index.js"
+  },
+  "keywords": [
+    "playwright",
+    "automation",
+    "linkedin"
+  ],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "playwright": "^1.40.0",
+    "dotenv": "^16.3.1"
+  },
+  "devDependencies": {}
+}

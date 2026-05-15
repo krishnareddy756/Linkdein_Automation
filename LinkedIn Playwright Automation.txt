@@ -1,0 +1,111 @@
+LinkedIn Playwright Automation Requirement
+Objective
+
+Create a simple automation script using Playwright in Node.js that performs the following actions:
+
+Opens LinkedIn login page
+Logs into LinkedIn using sample credentials
+Waits until login is successful
+Scrolls down the feed page slowly
+Scrolls back up slowly
+Ends the script gracefully
+
+This is only for learning and automation practice purposes.
+
+Tech Stack
+Node.js
+Playwright
+JavaScript
+Project Requirements
+1. Setup
+Initialize a Node.js project
+Install Playwright
+Use Chromium browser
+2. Login Functionality
+
+The script should:
+
+Navigate to:
+https://www.linkedin.com/login
+Use sample credentials stored as variables:
+const EMAIL = "sampleemail@example.com";
+const PASSWORD = "samplepassword";
+Fill:
+Email input
+Password input
+Click the Sign In button
+Wait for homepage/feed to load completely
+3. Browser Configuration
+
+Use:
+
+Non-headless mode (headless: false)
+Slow motion enabled (slowMo)
+Proper viewport size
+
+Example expectations:
+
+Browser should visibly open
+Actions should look human-like and smooth
+4. Scrolling Behavior
+
+After login:
+
+Scroll Down
+Slowly scroll downward multiple times
+Add delays between scrolls
+Use Playwright page evaluation or mouse wheel scrolling
+Scroll Up
+After reaching lower section,
+Slowly scroll back upward
+Add delays between scrolls
+
+The scrolling should appear smooth and realistic.
+
+5. Code Structure
+
+Create:
+
+index.js main file
+
+Code should:
+
+Use async/await properly
+Include comments
+Include basic error handling using try/catch
+6. Additional Requirements
+Wait intelligently using:
+waitForLoadState
+waitForTimeout
+Avoid unnecessary complexity
+Keep implementation beginner-friendly and clean
+Do not use external scraping libraries
+Do not scrape any data yet
+Only login + scrolling implementation is needed
+Expected Output
+
+When the script runs:
+
+Chromium browser opens
+LinkedIn login page loads
+Credentials are entered automatically
+Login succeeds
+Feed page opens
+Page scrolls down smoothly
+Page scrolls back up smoothly
+Browser remains open for a few seconds
+Script exits
+Deliverables
+
+Copilot should generate:
+
+Complete index.js
+Installation commands
+Run commands
+Required imports
+Full working Playwright implementation
+Preferred Coding Style
+Clean code
+Readable variable names
+Modular and beginner-friendly
+Proper comments explaining each step
