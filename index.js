@@ -4,10 +4,8 @@ import fs from 'fs';
 import path from 'path';
 import { appendToSheets, prepareDataForSheets } from './sheetsService.js';
 
-// Load environment variables from .env file
 dotenv.config();
 
-// Configuration from environment variables
 const EMAIL = process.env.LINKEDIN_EMAIL || 'sampleemail@example.com';
 const PASSWORD = process.env.LINKEDIN_PASSWORD || 'samplepassword';
 const HEADLESS = process.env.HEADLESS === 'false' ? false : true;
@@ -15,25 +13,20 @@ const SLOW_MO = parseInt(process.env.SLOW_MO || '500');
 const SESSION_DIR = process.env.SESSION_DIR || './sessions';
 const SESSION_EXPIRY_HOURS = parseInt(process.env.SESSION_EXPIRY_HOURS || '24');
 
-// Create sessions directory if it doesn't exist
 const ensureSessionDir = () => {
   if (!fs.existsSync(SESSION_DIR)) {
     fs.mkdirSync(SESSION_DIR, { recursive: true });
-    console.log(`📁 Created sessions directory: ${SESSION_DIR}`);
   }
 };
 
-// Get session file path
 const getSessionPath = () => {
   return path.join(SESSION_DIR, 'linkedin_session.json');
 };
 
-// Check if session exists and is valid
 const isSessionValid = () => {
   const sessionPath = getSessionPath();
   
   if (!fs.existsSync(sessionPath)) {
-    console.log('❌ No saved session found');
     return false;
   }
   
@@ -44,19 +37,15 @@ const isSessionValid = () => {
     const hoursPassed = (now - createdAt) / (1000 * 60 * 60);
     
     if (hoursPassed > SESSION_EXPIRY_HOURS) {
-      console.log(`⏰ Session expired (${Math.floor(hoursPassed)} hours old)`);
       return false;
     }
     
-    console.log(`✅ Valid session found (${Math.floor(hoursPassed)} hours old)`);
     return true;
   } catch (error) {
-    console.log('❌ Session file corrupted, starting fresh login');
     return false;
   }
 };
 
-// Save session after successful login
 const saveSession = async (page) => {
   try {
     ensureSessionDir();
@@ -72,89 +61,178 @@ const saveSession = async (page) => {
     };
     
     fs.writeFileSync(getSessionPath(), JSON.stringify(sessionData, null, 2));
-    console.log('💾 Session saved successfully');
   } catch (error) {
-    console.warn('⚠️  Could not save session:', error.message);
+    // Session save failed
   }
 };
 
-// Load session
 const loadSession = async (context) => {
   try {
     const sessionPath = getSessionPath();
     const sessionData = JSON.parse(fs.readFileSync(sessionPath, 'utf-8'));
-    
-    // Add cookies to context
     await context.addCookies(sessionData.cookies);
-    console.log('🔄 Session loaded from storage');
     return true;
   } catch (error) {
-    console.warn('⚠️  Could not load session:', error.message);
     return false;
   }
 };
 
-// Helper function to generate random delay (in milliseconds)
 const randomDelay = (min = 1000, max = 3000) => {
   return Math.floor(Math.random() * (max - min + 1)) + min;
 };
 
-// Helper function to scroll down
 const scrollDown = async (page, scrollCount = 3) => {
-  console.log(`🔻 Scrolling down ${scrollCount} times...`);
-  
   for (let i = 0; i < scrollCount; i++) {
-    const scrollAmount = Math.random() * 400 + 200; // Random scroll between 200-600px
+    const scrollAmount = Math.random() * 400 + 200;
     await page.evaluate((pixels) => {
-      window.scrollBy(0, pixels);
+      let scrollElement = document.querySelector('[role="main"]') || 
+                         document.querySelector('main') ||
+                         document.querySelector('.scaffold-layout__main') ||
+                         document.documentElement;
+      
+      if (scrollElement.scrollTop !== undefined && scrollElement.scrollHeight > scrollElement.clientHeight) {
+        scrollElement.scrollTop += pixels;
+      } else {
+        window.scrollBy(0, pixels);
+      }
     }, scrollAmount);
     
-    // Random delay between scrolls for realistic behavior
-    const delay = randomDelay(800, 2000);
-    await page.waitForTimeout(delay);
-    console.log(`   ↳ Scroll ${i + 1}/${scrollCount} completed`);
+    await page.waitForTimeout(randomDelay(800, 2000));
   }
 };
 
-// Helper function to scroll up
 const scrollUp = async (page, scrollCount = 3) => {
-  console.log(`🔺 Scrolling up ${scrollCount} times...`);
-  
   for (let i = 0; i < scrollCount; i++) {
-    const scrollAmount = Math.random() * 400 + 200; // Random scroll between 200-600px
+    const scrollAmount = Math.random() * 400 + 200;
     await page.evaluate((pixels) => {
-      window.scrollBy(0, -pixels);
+      let scrollElement = document.querySelector('[role="main"]') || 
+                         document.querySelector('main') ||
+                         document.querySelector('.scaffold-layout__main') ||
+                         document.documentElement;
+      
+      if (scrollElement.scrollTop !== undefined && scrollElement.scrollHeight > scrollElement.clientHeight) {
+        scrollElement.scrollTop -= pixels;
+      } else {
+        window.scrollBy(0, -pixels);
+      }
     }, scrollAmount);
     
-    // Random delay between scrolls for realistic behavior
-    const delay = randomDelay(800, 2000);
-    await page.waitForTimeout(delay);
-    console.log(`   ↳ Scroll ${i + 1}/${scrollCount} completed`);
+    await page.waitForTimeout(randomDelay(800, 2000));
   }
 };
 
-// Helper function to perform search and scroll through results
+const collectPostsFromPage = async (page, searchTerm) => {
+  const posts = [];
+  
+  try {
+    let postElements = await page.$$('div[class*="update-components"]');
+    if (postElements.length === 0) {
+      postElements = await page.$$('div[class*="update"]');
+    }
+    if (postElements.length === 0) {
+      postElements = await page.$$('article');
+    }
+    
+    const postsToProcess = Math.min(postElements.length, 5);
+    
+    for (let i = 0; i < postsToProcess; i++) {
+      try {
+        const postElement = postElements[i];
+        await postElement.scrollIntoViewIfNeeded();
+        await page.waitForTimeout(300);
+        
+        const moreButtons = await postElement.$$('button');
+        let moreButton = null;
+        
+        for (let btn of moreButtons) {
+          try {
+            const ariaLabel = await btn.getAttribute('aria-label');
+            const btnText = await btn.evaluate(el => el.textContent);
+            
+            if ((ariaLabel && (ariaLabel.toLowerCase().includes('more') || ariaLabel.toLowerCase().includes('menu'))) ||
+                (btnText && (btnText.includes('⋯') || btnText.includes('...')))) {
+              moreButton = btn;
+              break;
+            }
+          } catch (e) {
+            // Continue
+          }
+        }
+        
+        if (moreButton) {
+          try {
+            await moreButton.click();
+            await page.waitForTimeout(randomDelay(500, 800));
+            
+            let clickedCopy = false;
+            const copySelectors = [
+              '[role="menuitem"] >> text=Copy link to post',
+              '[role="menuitem"] >> text=Copy link',
+              'div >> text=Copy link to post',
+              'div >> text=Copy link',
+              'li >> text=Copy link',
+            ];
+            
+            for (let selector of copySelectors) {
+              try {
+                const el = await page.$(selector);
+                if (el) {
+                  await el.click();
+                  clickedCopy = true;
+                  await page.waitForTimeout(500);
+                  break;
+                }
+              } catch (e) {
+                // Continue
+              }
+            }
+            
+            if (clickedCopy) {
+              try {
+                const clipboardText = await page.evaluate(() => navigator.clipboard.readText()).catch(() => '');
+                if (clipboardText && clipboardText.includes('linkedin.com')) {
+                  posts.push({
+                    searchTerm: searchTerm,
+                    postUrl: clipboardText,
+                  });
+                }
+              } catch (clipboardError) {
+                // Clipboard error
+              }
+            }
+            
+            await page.keyboard.press('Escape');
+            await page.waitForTimeout(300);
+          } catch (clickError) {
+            // Error clicking menu
+          }
+        }
+      } catch (error) {
+        // Error processing post
+      }
+    }
+  } catch (error) {
+    // Error collecting posts
+  }
+  
+  return posts;
+};
+
 const performSearch = async (page, searchQuery) => {
-  console.log(`\n🔍 Starting search for: ${searchQuery}\n`);
+  console.log(`\nSearching for: ${searchQuery}`);
   
   const collectedPosts = [];
   
   try {
-    // Wait a bit before search
     await page.waitForTimeout(randomDelay(1000, 2000));
     
-    // Step 1: Find and click the search bar
-    console.log('🎯 Locating search bar...');
     const searchInputs = await page.$$('[placeholder*="Search"]');
     
     if (searchInputs.length === 0) {
-      console.warn('⚠️  Search bar not found, trying alternative method...');
-      // Try keyboard shortcut to focus search
       await page.keyboard.press('Escape');
       await page.waitForTimeout(300);
     }
     
-    // Try multiple selectors for search bar
     const searchSelectors = [
       '[placeholder*="Search"]',
       'input[aria-label*="Search"]',
@@ -168,7 +246,6 @@ const performSearch = async (page, searchQuery) => {
         if (element) {
           await element.click();
           searchInputFound = true;
-          console.log(`✅ Search bar found with selector: ${selector}`);
           break;
         }
       } catch (e) {
@@ -177,269 +254,229 @@ const performSearch = async (page, searchQuery) => {
     }
     
     if (!searchInputFound) {
-      console.warn('⚠️  Could not find search bar, skipping search');
+      console.warn('Could not find search bar');
       return collectedPosts;
     }
     
     await page.waitForTimeout(randomDelay(500, 1000));
-    
-    // Step 2: Clear and type search query
-    console.log(`📝 Typing search query: ${searchQuery}`);
     await page.keyboard.press('Control+A');
     await page.keyboard.type(searchQuery, { delay: 50 });
     await page.waitForTimeout(randomDelay(500, 1000));
     
-    // Step 3: Press Enter
-    console.log('⏎ Pressing Enter to search...');
     await page.keyboard.press('Enter');
     await page.waitForTimeout(randomDelay(2000, 3000));
     
-    // Step 4: Wait for results
-    console.log('⏳ Waiting for search results to load...');
     try {
       await page.waitForLoadState('networkidle', { timeout: 15000 });
     } catch (error) {
-      console.warn('⚠️  Network timeout, continuing with available results...');
+      // Network timeout, continue
     }
     
-    console.log(`✅ Search results loaded for ${searchQuery}`);
+    await page.waitForTimeout(3000);
     
-    // Step 5: Scroll and collect posts
-    const scrollCount = Math.floor(Math.random() * 4) + 2; // 2-5 scrolls
-    console.log(`📜 Scrolling through ${scrollCount} times in search results...`);
+    // Click Posts filter button if exists
+    try {
+      await page.waitForTimeout(2000);
+      
+      let postsButton = await page.$('button:has-text("Posts")');
+      
+      if (!postsButton) {
+        postsButton = await page.locator('button', { has: page.locator('text=Posts') }).first().elementHandle().catch(() => null);
+      }
+      
+      if (!postsButton) {
+        const allButtons = await page.$$('button');
+        for (let btn of allButtons) {
+          const text = await btn.evaluate(el => el.textContent.trim());
+          if (text === 'Posts') {
+            postsButton = btn;
+            break;
+          }
+        }
+      }
+      
+      if (postsButton) {
+        await postsButton.scrollIntoViewIfNeeded();
+        await page.waitForTimeout(500);
+        await postsButton.click({ force: true });
+        await page.waitForTimeout(randomDelay(2000, 3000));
+        
+        try {
+          await page.waitForLoadState('networkidle', { timeout: 5000 });
+        } catch (e) {
+          // Continue
+        }
+      }
+    } catch (error) {
+      // Continue if Posts button not found
+    }
+    
+    // Scroll and collect posts
+    const scrollCount = Math.floor(Math.random() * 3) + 3;
     
     for (let i = 0; i < scrollCount; i++) {
-      const scrollAmount = Math.random() * 400 + 200;
-      await page.evaluate((pixels) => {
-        window.scrollBy(0, pixels);
-      }, scrollAmount);
-      
-      const delay = randomDelay(1000, 2000);
-      await page.waitForTimeout(delay);
-      console.log(`   ↳ Scroll ${i + 1}/${scrollCount} completed`);
-      
-      // Try to collect posts after each scroll
-      const posts = await collectPostsFromPage(page, searchQuery);
-      collectedPosts.push(...posts);
-    }
-    
-    // Step 6: Wait 10 seconds on search results page
-    console.log('⏱️  Waiting 10 seconds on search results page...');
-    for (let i = 10; i > 0; i--) {
-      if (i % 2 === 0) {
-        console.log(`   ↳ ${i} seconds remaining...`);
+      const scrollAmount = Math.random() * 500 + 400;
+      try {
+        await page.evaluate((pixels) => {
+          window.scrollBy({ top: pixels, left: 0, behavior: 'auto' });
+        }, scrollAmount);
+        
+        await page.waitForTimeout(randomDelay(2000, 3500));
+        
+        const posts = await collectPostsFromPage(page, searchQuery);
+        if (posts.length > 0) {
+          collectedPosts.push(...posts);
+        }
+      } catch (error) {
+        // Continue
       }
-      await page.waitForTimeout(1000);
     }
     
-    // Remove duplicates
+    await page.waitForTimeout(randomDelay(5000, 10000));
+    
     const uniquePosts = Array.from(
       new Map(collectedPosts.map(post => [post.postUrl, post])).values()
     );
+    const selectedPosts = uniquePosts.slice(0, 5);
     
-    // Take random 0-5 posts
-    const randomCount = Math.floor(Math.random() * 6); // 0-5
-    const selectedPosts = uniquePosts.slice(0, randomCount);
-    
-    console.log(`✅ Completed search for: ${searchQuery}`);
-    console.log(`   📊 Collected ${selectedPosts.length} unique posts from results\n`);
-    
+    console.log(`Found ${selectedPosts.length} posts`);
     return selectedPosts;
     
   } catch (error) {
-    console.error(`❌ Error during search for ${searchQuery}:`, error.message);
+    console.error(`Error during search for ${searchQuery}:`, error.message);
     return collectedPosts;
   }
 };
 
-// Helper function to collect posts from current page
-const collectPostsFromPage = async (page, searchTerm) => {
-  const posts = [];
-  
-  try {
-    // Get all post URLs visible on page
-    const postLinks = await page.$$eval('a[href*="/feed/update"]', elements =>
-      elements.map(el => ({
-        url: el.href,
-        visible: el.offsetHeight > 0,
-      }))
-    );
-    
-    for (const link of postLinks) {
-      if (link.visible && link.url) {
-        posts.push({
-          searchTerm: searchTerm,
-          postUrl: link.url,
-        });
-      }
-    }
-    
-    // Also try alternative post selectors
-    const altLinks = await page.$$eval('[data-test-id*="update"] a[href*="/feed"]', 
-      elements => 
-        elements
-          .map(el => el.href)
-          .filter(url => url && url.includes('/feed'))
-    ).catch(() => []);
-    
-    for (const url of altLinks) {
-      if (!posts.find(p => p.postUrl === url)) {
-        posts.push({
-          searchTerm: searchTerm,
-          postUrl: url,
-        });
-      }
-    }
-  } catch (error) {
-    // Silently continue if collection fails
-  }
-  
-  return posts;
-};
-
-// Main automation function
 const runLinkedInAutomation = async () => {
   let browser;
   let page;
   let allCollectedPosts = [];
   
   try {
-    console.log('🚀 Starting LinkedIn Playwright Automation...\n');
+    console.log('Starting LinkedIn Playwright Automation...\n');
     
-    // Step 1: Launch Chromium browser
-    console.log('📱 Launching Chromium browser...');
     browser = await chromium.launch({
       headless: HEADLESS,
-      slowMo: SLOW_MO, // Slow motion for human-like behavior
+      slowMo: SLOW_MO,
     });
     
-    // Check if we have a valid session
-    const hasValidSession = isSessionValid();
+    let context;
+    let sessionLoaded = false;
     
-    if (hasValidSession) {
-      // Step 2A: Create context and load session (Skip login)
-      console.log('\n🔐 Attempting to use saved session...\n');
-      const context = await browser.newContext();
-      await loadSession(context);
-      page = await context.newPage({
-        viewport: { width: 1280, height: 720 },
-      });
+    console.log('Checking for saved session...\n');
+    try {
+      context = await browser.newContext();
+      const sessionPath = getSessionPath();
       
-      // Navigate to LinkedIn home
-      console.log('🔗 Navigating to LinkedIn home...');
-      await page.goto('https://www.linkedin.com/feed/', {
-        waitUntil: 'networkidle',
-      });
-      
-      // Verify we're logged in
-      try {
-        await page.waitForSelector('[data-test-id="profile-rail"]', { timeout: 5000 });
-        console.log('✅ Session is valid, logged in successfully!\n');
-      } catch (error) {
-        console.warn('⚠️  Session may be expired, forcing re-login...');
-        await page.close();
-        throw new Error('Session validation failed');
+      if (fs.existsSync(sessionPath)) {
+        await loadSession(context);
+        page = await context.newPage({
+          viewport: { width: 1280, height: 720 },
+        });
+        
+        await page.goto('https://www.linkedin.com/feed/', {
+          waitUntil: 'domcontentloaded',
+          timeout: 10000,
+        });
+        
+        await page.waitForTimeout(2000);
+        const pageUrl = page.url();
+        const isOnFeed = pageUrl.includes('linkedin.com/feed');
+        
+        if (isOnFeed) {
+          console.log('Session loaded successfully\n');
+          sessionLoaded = true;
+        } else {
+          console.log('Session expired, logging in...');
+          await context.close();
+        }
       }
-    } else {
-      // Step 2B: Fresh login
-      console.log('🔑 Starting fresh login...\n');
+    } catch (error) {
+      try {
+        await context?.close();
+      } catch (e) {}
+    }
+    
+    if (!sessionLoaded) {
+      console.log('Starting login process...\n');
       
       const context = await browser.newContext();
       page = await context.newPage({
         viewport: { width: 1280, height: 720 },
       });
       
-      // Navigate to LinkedIn login page
-      console.log('🔗 Navigating to LinkedIn login page...');
       await page.goto('https://www.linkedin.com/login', {
-        waitUntil: 'networkidle',
+        waitUntil: 'domcontentloaded',
+        timeout: 15000,
       });
       
-      console.log('✅ Login page loaded\n');
-      
-      // Fill in email
-      console.log('📝 Filling in email...');
       await page.fill('input[name="session_key"]', EMAIL);
       await page.waitForTimeout(randomDelay(500, 1000));
       
-      // Fill in password
-      console.log('🔐 Filling in password...');
       await page.fill('input[name="session_password"]', PASSWORD);
       await page.waitForTimeout(randomDelay(500, 1000));
       
-      // Click Sign In button
-      console.log('🔓 Clicking Sign In button...');
       await page.click('button[type="submit"]');
       
-      // Wait for login to complete and homepage/feed to load
-      console.log('⏳ Waiting for login to complete and feed to load...');
       try {
         await page.waitForLoadState('networkidle', { timeout: 30000 });
-        console.log('✅ Successfully logged in!\n');
+        console.log('Successfully logged in\n');
       } catch (error) {
-        console.warn('⚠️  Network idle timeout - page may still be loading, continuing...');
+        // Continue
       }
       
-      // Save session for future use
       await saveSession(page);
     }
     
-    // Small delay to ensure page is fully interactive
     await page.waitForTimeout(randomDelay(2000, 3000));
     
-    // Step 7: Scroll down the feed
-    const randomScrollDownCount = Math.floor(Math.random() * 3) + 3; // 3-5 scrolls
+    const randomScrollDownCount = Math.floor(Math.random() * 3) + 3;
     await scrollDown(page, randomScrollDownCount);
     
-    // Small pause between scrolling directions
     await page.waitForTimeout(randomDelay(1500, 2500));
     
-    // Step 8: Scroll back up
-    const randomScrollUpCount = Math.floor(Math.random() * 3) + 3; // 3-5 scrolls
+    const randomScrollUpCount = Math.floor(Math.random() * 3) + 3;
     await scrollUp(page, randomScrollUpCount);
     
-    // Step 9: Search for #cto and collect posts
+    console.log('Feed scrolling completed\n');
+    
     const ctoPosts = await performSearch(page, '#cto');
     allCollectedPosts.push(...ctoPosts);
     
-    // Step 10: Go back to feed
-    console.log('🏠 Returning to feed...');
-    await page.goto('https://www.linkedin.com/feed/', { waitUntil: 'networkidle' });
-    await page.waitForTimeout(randomDelay(2000, 3000));
+    console.log('\nReturning to feed...\n');
+    try {
+      await page.goto('https://www.linkedin.com/feed/', { 
+        waitUntil: 'domcontentloaded',
+        timeout: 20000 
+      });
+    } catch (error) {
+      await page.waitForTimeout(3000);
+    }
+    await page.waitForTimeout(randomDelay(1000, 2000));
     
-    // Step 11: Search for #hiring and collect posts
     const hiringPosts = await performSearch(page, '#hiring');
     allCollectedPosts.push(...hiringPosts);
     
-    // Step 12: Upload collected posts to Google Sheets
     if (allCollectedPosts.length > 0) {
-      console.log(`\n📊 Uploading ${allCollectedPosts.length} posts to Google Sheets...\n`);
+      console.log(`\nUploading ${allCollectedPosts.length} posts to Google Sheets...\n`);
       const dataToUpload = prepareDataForSheets(allCollectedPosts);
       await appendToSheets(dataToUpload);
     } else {
-      console.log('\n⚠️  No posts collected to upload');
+      console.log('\nNo posts collected to upload');
     }
     
-    // Step 13: Wait gracefully before closing
-    console.log('⏱️  Waiting before closing browser...');
     await page.waitForTimeout(randomDelay(2000, 4000));
-    
-    console.log('✅ Task completed successfully!');
+    console.log('Task completed!');
     
   } catch (error) {
-    // Error handling
-    console.error('❌ An error occurred during automation:', error.message);
-    console.error('Error details:', error);
-    
+    console.error('Error:', error.message);
   } finally {
-    // Graceful exit - close browser
     if (browser) {
-      console.log('🛑 Closing browser...');
       await browser.close();
-      console.log('👋 Browser closed. Exiting automation.\n');
+      console.log('\nAutomation completed.\n');
     }
   }
 };
 
-// Run the automation
 runLinkedInAutomation();
