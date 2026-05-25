@@ -1,6 +1,114 @@
 import { randomDelay } from './scrolling.js';
-import { isPageValid, collectPostsFromPage } from './pageUtils.js';
+import { isPageValid, collectPostsFromPage, capturePageDiagnostics } from './pageUtils.js';
 
+// Helper function to click the "Posts" filter inside iframe
+const clickPostsFilter = async (page, searchQuery = '', maxRetries = 3) => {
+  console.log(`\n[FILTER] Attempting to click "Posts" filter (max ${maxRetries} retries)`);
+  
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      console.log(`[FILTER] Retry attempt ${attempt}/${maxRetries}`);
+      
+      // Wait for iframe to be available
+      console.log(`[FILTER] Waiting for search results iframe to load...`);
+      try {
+        await page.waitForSelector('[data-testid="interop-iframe"]', { timeout: 10000 });
+        console.log(`[FILTER] ✅ Iframe found`);
+      } catch (error) {
+        console.log(`[FILTER] ⚠️  Iframe not found: ${error.message}`);
+      }
+      
+      // Wait for iframe content to fully load
+      await page.waitForTimeout(2000);
+      
+      // Get the iframe element using frameLocator
+      const iframe = page.frameLocator('[data-testid="interop-iframe"]');
+      
+      console.log(`[FILTER] ✅ Iframe accessible, finding Posts button...`);
+      
+      // Find the Posts button inside the iframe using getByRole
+      const postsButton = iframe.getByRole('button', { name: 'Posts' });
+      
+      // Wait for button to be visible - increased timeout to 8 seconds
+      console.log(`[FILTER] Waiting for Posts button to be visible (up to 8 seconds)...`);
+      await postsButton.waitFor({
+        state: 'visible',
+        timeout: 8000
+      });
+      console.log(`[FILTER] ✅ Posts button is visible`);
+      
+      // Scroll into view
+      console.log(`[FILTER] Scrolling Posts button into view`);
+      await postsButton.scrollIntoViewIfNeeded();
+      await page.waitForTimeout(500);
+      
+      // Click the button
+      console.log(`[FILTER] Clicking Posts button`);
+      await postsButton.click();
+      console.log(`[FILTER] ✅ Successfully clicked "Posts" filter`);
+      
+      // Wait for filter to apply and content to update
+      await page.waitForTimeout(randomDelay(2000, 3000));
+      
+      // Scroll inside iframe to ensure posts are loaded
+      console.log(`[FILTER] Scrolling inside iframe to load posts...`);
+      try {
+        await iframe.locator('body').evaluate(el => el.scrollTop = 0);
+        await page.waitForTimeout(1000);
+      } catch (e) {
+        console.log(`[FILTER] ℹ️  Scroll not needed`);
+      }
+      
+      return true;
+      
+    } catch (error) {
+      console.log(`[FILTER] ❌ Attempt ${attempt} failed: ${error.message}`);
+      
+      if (attempt < maxRetries) {
+        console.log(`[FILTER] Waiting 2 seconds before retry...`);
+        await page.waitForTimeout(2000);
+      }
+    }
+  }
+  
+  console.log(`[FILTER] ⚠️  Failed to click "Posts" filter after ${maxRetries} attempts`);
+  return false;
+};
+
+// Helper function to wait for posts to load after filter click
+const waitForPostsToLoad = async (page, maxWaitTime = 15000) => {
+  console.log(`[POSTS] Waiting for posts/content to load (max ${maxWaitTime}ms)...`);
+  
+  try {
+    // Scroll inside iframe multiple times to load content
+    try {
+      const iframe = page.frameLocator('[data-testid="interop-iframe"]');
+      for (let i = 0; i < 3; i++) {
+        await iframe.locator('body').evaluate(el => {
+          el.scrollTop += window.innerHeight;
+        });
+        await page.waitForTimeout(500);
+      }
+    } catch (e) {
+      // Scroll might fail, continue anyway
+    }
+    
+    // Search results may not have traditional feed-update containers
+    // Look for common indicators that content has loaded
+    await page.waitForSelector('a[href*="/feed/update/"], a[href*="/posts/"], li, .search-result', 
+      { timeout: maxWaitTime, strict: false });
+    console.log(`[POSTS] ✅ Content loaded on page`);
+    await page.waitForTimeout(randomDelay(1000, 2000));
+    return true;
+  } catch (error) {
+    console.log(`[POSTS] ⚠️  Content selector not found within ${maxWaitTime}ms: ${error.message}`);
+    // Don't return false - proceed anyway with graceful degradation
+    await page.waitForTimeout(3000);
+    return false; // Indicate timeout but don't stop execution
+  }
+};
+
+// Main search function
 const performSearch = async (page, searchQuery) => {
   console.log(`\n🔍 Searching for: ${searchQuery}`);
   console.log(`[DEBUG] performSearch started for: ${searchQuery}`);
@@ -10,175 +118,86 @@ const performSearch = async (page, searchQuery) => {
   try {
     // Validate page before starting
     if (!(await isPageValid(page))) {
-      console.warn('Page is no longer valid');
+      console.warn('❌ Page is no longer valid');
       return collectedPosts;
     }
     
-    console.log(`[DEBUG] Page is valid, proceeding with search`);
+    console.log(`[DEBUG] ✅ Page is valid, proceeding with search`);
     await page.waitForTimeout(randomDelay(1000, 2000));
     
-    const searchInputs = await page.$$('[placeholder*="Search"]');
+    // === STEP 1: Find and click search bar ===
+    console.log(`[SEARCH] Finding search input using data-testid="typeahead-input"`);
+    const searchInput = page.getByTestId('typeahead-input');
     
-    if (searchInputs.length === 0) {
-      await page.keyboard.press('Escape');
-      await page.waitForTimeout(300);
-    }
-    
-    const searchSelectors = [
-      '[placeholder*="Search"]',
-      'input[aria-label*="Search"]',
-      '[data-test-id="search-global-typeahead--input"]',
-    ];
-    
-    let searchInputFound = false;
-    for (const selector of searchSelectors) {
-      try {
-        const element = await page.$(selector);
-        if (element) {
-          await element.click();
-          searchInputFound = true;
-          break;
-        }
-      } catch (e) {
-        continue;
-      }
-    }
-    
-    if (!searchInputFound) {
-      console.warn('Could not find search bar');
-      console.log(`[DEBUG] Searched with selectors: ${searchSelectors.join(', ')}`);
+    try {
+      await searchInput.waitFor({ state: 'visible', timeout: 5000 });
+      console.log(`[SEARCH] ✅ Found search bar`);
+      await searchInput.click();
+    } catch (error) {
+      console.log(`[SEARCH] ❌ Could not find search bar: ${error.message}`);
       return collectedPosts;
     }
     
-    console.log(`[DEBUG] Search input found, typing query`);
+    // === STEP 2: Type query and search ===
+    console.log(`[SEARCH] Typing search query: ${searchQuery}`);
     await page.waitForTimeout(randomDelay(500, 1000));
-    await page.keyboard.press('Control+A');
-    await page.keyboard.type(searchQuery, { delay: 50 });
+    await searchInput.fill(searchQuery);
     await page.waitForTimeout(randomDelay(500, 1000));
     
-    console.log(`[DEBUG] Pressing Enter to search`);
-    await page.keyboard.press('Enter');
+    console.log(`[SEARCH] Pressing Enter to search`);
+    await searchInput.press('Enter');
     await page.waitForTimeout(randomDelay(2000, 3000));
     
-    console.log(`[DEBUG] Waiting for search results to load`);
+    // === STEP 3: Wait for search results to load ===
+    console.log(`[SEARCH] Waiting for search results page and iframe to load`);
     try {
-      await page.waitForLoadState('networkidle', { timeout: 15000 });
-      console.log(`[DEBUG] Page reached networkidle state`);
+      // Wait for the search results iframe to appear
+      await page.waitForSelector('[data-testid="interop-iframe"]', { timeout: 10000 });
+      console.log(`[SEARCH] ✅ Search results iframe loaded`);
     } catch (error) {
-      console.log(`[DEBUG] Network timeout, continuing anyway: ${error.message}`);
+      console.log(`[SEARCH] ⚠️  Iframe timeout, continuing anyway: ${error.message}`);
     }
     
-    await page.waitForTimeout(3000);
-    console.log(`[DEBUG] Search results should be loaded`);
+    // Wait a bit for content to render inside iframe
+    await page.waitForTimeout(2000);
+    console.log(`[SEARCH] ✅ Search results page ready`);
     
-    // DEBUG: Dump the page structure
-    console.log(`[DEBUG] ========== PAGE STRUCTURE DEBUG ==========`);
-    const pageInfo = await page.evaluate(() => {
-      const info = {
-        title: document.title,
-        url: window.location.href,
-        filterButton: !!document.querySelector('#navigational-filter_resultType'),
-        feedUpdates: document.querySelectorAll('[data-testid="feed-update"]').length,
-        allDivs: document.querySelectorAll('div[data-testid*="update"]').length,
-        allArticles: document.querySelectorAll('article').length,
-        allSections: document.querySelectorAll('section').length,
-        allLinks: document.querySelectorAll('a[href*="linkedin.com/feed"]').length,
-      };
-      return info;
-    });
-    console.log(`[DEBUG] Page Info:`, pageInfo);
+    // === STEP 4: Click "Posts" filter ===
+    const filterClicked = await clickPostsFilter(page, searchQuery);
     
-    // Try clicking filter using XPath
-    try {
-      console.log(`[DEBUG] Attempting to click Posts filter via XPath...`);
-      const filterXPath = `/html/body/div[6]/div[3]/div[2]/section/div/nav/div/ul/li[1]/div/button`;
-      const filterElement = await page.evaluate((xpath) => {
-        const result = document.evaluate(xpath, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null);
-        return result.singleNodeValue ? 'found' : 'not found';
-      }, filterXPath);
-      console.log(`[DEBUG] Filter element via XPath: ${filterElement}`);
-      
-      if (filterElement === 'found') {
-        await page.evaluate((xpath) => {
-          const result = document.evaluate(xpath, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null);
-          if (result.singleNodeValue) {
-            result.singleNodeValue.click();
-          }
-        }, filterXPath);
-        console.log(`[DEBUG] ✓ Clicked Posts filter via XPath`);
-        await page.waitForTimeout(randomDelay(2000, 3000));
-      }
-    } catch (error) {
-      console.log(`[DEBUG] XPath click failed: ${error.message}`);
+    if (!filterClicked) {
+      console.warn(`[FILTER] ⚠️  Could not click filter, will attempt collection anyway`);
     }
     
-    // Try label selector (Posts is a label, not a button)
-    try {
-      console.log(`[DEBUG] Attempting to click Posts filter via label selector...`);
-      const labels = await page.$$('label');
-      for (const label of labels) {
-        const text = await label.evaluate(el => el.textContent.trim());
-        if (text === 'Posts') {
-          console.log(`[DEBUG] Found Posts label, clicking it`);
-          await label.click();
-          console.log(`[DEBUG] ✓ Clicked Posts label`);
-          await page.waitForTimeout(randomDelay(2000, 3000));
-          break;
-        }
-      }
-    } catch (error) {
-      console.log(`[DEBUG] Label click failed: ${error.message}`);
+    // === STEP 5: Wait for posts to load ===
+    await waitForPostsToLoad(page);
+    
+    // === STEP 6: Collect posts (exactly 5) ===
+    console.log(`[COLLECT] Collecting posts from search results...`);
+    const posts = await collectPostsFromPage(page, searchQuery);
+    
+    if (posts.length > 0) {
+      collectedPosts.push(...posts);
     }
     
-    // Scroll and collect posts using keyboard scrolling
-    const scrollCount = 5;
-    console.log(`[DEBUG] Starting scroll loop with ${scrollCount} iterations using Page Down key`);
-    
-    for (let i = 0; i < scrollCount; i++) {
-      if (!(await isPageValid(page))) {
-        console.warn('Page became invalid during scroll loop');
-        break;
-      }
-      
-      console.log(`[DEBUG] Scroll iteration ${i + 1}: Pressing Page Down`);
-      
-      try {
-        for (let j = 0; j < 3; j++) {
-          await page.keyboard.press('PageDown');
-          await page.waitForTimeout(500);
-        }
-        
-        console.log(`[DEBUG] Scroll iteration ${i + 1}: Waiting for content to load`);
-        await page.waitForTimeout(2000);
-        
-        console.log(`[DEBUG] Scroll iteration ${i + 1}: Collecting posts`);
-        const posts = await collectPostsFromPage(page, searchQuery);
-        console.log(`[DEBUG] Scroll iteration ${i + 1}: Collected ${posts.length} posts`);
-        
-        if (posts.length > 0) {
-          collectedPosts.push(...posts);
-        }
-      } catch (error) {
-        console.warn(`Error during scroll iteration ${i + 1}:`, error.message);
-        break;
-      }
-    }
-    
-    console.log(`[DEBUG] Total posts collected: ${collectedPosts.length}`);
-    await page.waitForTimeout(1000);
-    
+    // Deduplicate and limit to 5 posts
     const uniquePosts = Array.from(
       new Map(collectedPosts.map(post => [post.postUrl, post])).values()
     );
     const selectedPosts = uniquePosts.slice(0, 5);
     
-    console.log(`Found ${selectedPosts.length} posts`);
+    console.log(`[COLLECT] ✅ Found and collected ${selectedPosts.length} posts`);
+    
+    if (selectedPosts.length === 0) {
+      console.warn(`[COLLECT] ⚠️  No posts collected for search: ${searchQuery}`);
+    }
+    
     return selectedPosts;
     
   } catch (error) {
-    console.error(`Error during search for ${searchQuery}:`, error.message);
+    console.error(`[ERROR] Error during search for ${searchQuery}:`, error.message);
     return collectedPosts;
   }
 };
 
-export { performSearch };
+export { performSearch, clickPostsFilter, waitForPostsToLoad };

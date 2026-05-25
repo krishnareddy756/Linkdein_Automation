@@ -11,242 +11,187 @@ const collectPostsFromPage = async (page, searchTerm) => {
   const posts = [];
   
   try {
-    console.log(`  [DEBUG] ========== POST COLLECTION DEBUG ==========`);
+    console.log(`  [COLLECT] ========== POST EXTRACTION START ==========`);
+    console.log(`  [COLLECT] Search term: ${searchTerm}`);
+    console.log(`  [COLLECT] Using "Copy link to post" method...`);
     
-    // First, dump all available selectors
-    const selectors = {
-      'data-testid="feed-update"': await page.$$('[data-testid="feed-update"]').then(x => x.length),
-      'article': await page.$$('article').then(x => x.length),
-      'div[data-testid*="post"]': await page.$$('div[data-testid*="post"]').then(x => x.length),
-      'div[data-testid*="update"]': await page.$$('div[data-testid*="update"]').then(x => x.length),
-      'a[href*="/posts/"]': await page.$$('a[href*="/posts/"]').then(x => x.length),
-    };
-    console.log(`  [DEBUG] Available selectors:`, selectors);
+    // Get the iframe
+    const iframe = page.frameLocator('[data-testid="interop-iframe"]');
     
-    // ALSO dump ALL linkedin links to see what's available
-    const allLinksInfo = await page.evaluate(() => {
-      const allLinks = document.querySelectorAll('a[href*="linkedin.com"]');
-      const linkSummary = {
-        totalLinkedInLinks: allLinks.length,
-        feedLinks: 0,
-        postLinks: 0,
-        companyLinks: 0,
-        otherLinks: 0,
-        sampleLinks: []
-      };
-      
-      for (let i = 0; i < allLinks.length; i++) {
-        const href = allLinks[i].getAttribute('href');
-        if (!href) continue;
-        
-        if (href.includes('/feed/')) linkSummary.feedLinks++;
-        else if (href.includes('/posts/')) linkSummary.postLinks++;
-        else if (href.includes('/company/')) linkSummary.companyLinks++;
-        else linkSummary.otherLinks++;
-        
-        // Collect first 15 links as samples
-        if (linkSummary.sampleLinks.length < 15) {
-          linkSummary.sampleLinks.push(href.substring(0, 70));
-        }
-      }
-      
-      return linkSummary;
-    });
-    
-    console.log(`  [DEBUG] All LinkedIn links on page:`, allLinksInfo);
-    
-    // Try to find post containers using multiple selectors
-    let postContainers = await page.$$('[data-testid="feed-update"]');
-    
-    if (postContainers.length === 0) {
-      console.log(`  [DEBUG] Trying: article`);
-      postContainers = await page.$$('article');
-    }
-    
-    if (postContainers.length === 0) {
-      console.log(`  [DEBUG] Trying: div[data-testid*="update"]`);
-      postContainers = await page.$$('div[data-testid*="update"]');
-    }
-    
-    if (postContainers.length === 0) {
-      console.log(`  [DEBUG] Extracting post links directly from page`);
-      const links = await page.evaluate(() => {
-        const postLinks = [];
-        const allLinks = document.querySelectorAll('a[href*="linkedin.com"]');
-        
-        console.log(`Scanning ${allLinks.length} links...`);
-        
-        for (const link of allLinks) {
-          const href = link.getAttribute('href');
-          if (!href) continue;
-          
-          // Debug: log all links with /posts/
-          if (href.includes('/posts/')) {
-            console.log(`Found /posts/ link: ${href.substring(0, 100)}`);
-          }
-          
-          // Simple approach: just grab anything with /posts/ that's not obviously a company page
-          const isCompanyPostsPage = href.includes('/company/') && href.includes('/posts');
-          
-          if (href.includes('/posts/') && !isCompanyPostsPage) {
-            postLinks.push(href);
-            console.log(`✓ Added: ${href.substring(0, 80)}`);
-          }
-        }
-        
-        return postLinks;
-      });
-      
-      console.log(`  [DEBUG] Extracted ${links.length} total post links before dedup`);
-      
-      if (links.length > 0) {
-        const uniqueLinks = [...new Set(links)];
-        console.log(`  [DEBUG] After dedup: ${uniqueLinks.length} unique links`);
-        
-        const selectedLinks = uniqueLinks.slice(0, 5);
-        console.log(`  [DEBUG] Final selected links: ${selectedLinks.length}`);
-        
-        for (const link of selectedLinks) {
-          posts.push({
-            searchTerm: searchTerm,
-            postUrl: link,
-          });
-          console.log(`  [DEBUG] ✓ Added link: ${link.substring(0, 60)}`);
-        }
-      } else {
-        console.log(`  [DEBUG] No /posts/ links found after filtering. Trying alternative: grab ALL /posts/ links regardless`);
-        const allPostsLinks = await page.evaluate(() => {
-          const result = [];
-          const allLinks = document.querySelectorAll('a[href*="/posts/"]');
-          for (const link of allLinks) {
-            const href = link.getAttribute('href');
-            if (href) result.push(href);
-          }
-          return result;
-        });
-        
-        console.log(`  [DEBUG] All /posts/ links found: ${allPostsLinks.length}`);
-        allPostsLinks.forEach((link, i) => console.log(`    ${i+1}. ${link.substring(0, 80)}`));
-        
-        const uniqueLinks = [...new Set(allPostsLinks)].slice(0, 5);
-        for (const link of uniqueLinks) {
-          posts.push({
-            searchTerm: searchTerm,
-            postUrl: link,
-          });
-          console.log(`  [DEBUG] ✓ Added link: ${link.substring(0, 60)}`);
-        }
-      }
-      
-      return posts;
-    }
-    
-    console.log(`  [DEBUG] Found ${postContainers.length} post containers`);
-    
-    for (let i = 0; i < Math.min(postContainers.length, 5); i++) {
+    // Scroll inside iframe to load more posts
+    console.log(`  [COLLECT] Scrolling inside iframe to load posts...`);
+    for (let i = 0; i < 5; i++) {
       try {
-        await postContainers[i].scrollIntoViewIfNeeded();
-        await page.waitForTimeout(300);
+        const scrollableArea = iframe.locator('[role="region"], [class*="scroll"], body');
+        await scrollableArea.first().evaluate(el => {
+          el.scrollTop = el.scrollHeight;
+        });
+        await new Promise(r => setTimeout(r, 800));
+        console.log(`  [COLLECT] Scroll attempt ${i + 1}`);
+      } catch (e) {
+        break;
+      }
+    }
+    
+    // Find all post containers in iframe
+    console.log(`  [COLLECT] Finding post control menu buttons...`);
+    const postMenuButtons = await iframe.locator('button[aria-label*="Open control menu"]').all();
+    console.log(`  [COLLECT] Found ${postMenuButtons.length} posts with control menus`);
+    
+    // Limit to 5 posts
+    const postsToCollect = Math.min(postMenuButtons.length, 5);
+    console.log(`  [COLLECT] Collecting ${postsToCollect} posts (limit: 5)`);
+    
+    for (let i = 0; i < postsToCollect; i++) {
+      try {
+        console.log(`  [COLLECT] Processing post ${i + 1}/${postsToCollect}...`);
         
-        console.log(`  [DEBUG] Post ${i + 1}: Looking for three-dot menu button`);
+        // Get the button again (fresh reference)
+        const postMenuBtn = await iframe.locator('button[aria-label*="Open control menu"]').nth(i);
         
-        let menuButton = await postContainers[i].$('button[aria-label*="More"]');
+        // Scroll into view
+        await postMenuBtn.scrollIntoViewIfNeeded();
+        await new Promise(r => setTimeout(r, 500));
         
-        if (!menuButton) {
-          menuButton = await postContainers[i].$('[role="button"][aria-label*="more"]');
-        }
+        // Click the control menu button
+        await postMenuBtn.click();
+        await new Promise(r => setTimeout(r, 500));
         
-        if (!menuButton) {
-          menuButton = await postContainers[i].$('[role="button"][aria-label*="More"]');
-        }
+        // Click "Copy link to post" button
+        const copyButton = iframe.getByRole('button', { name: 'Copy link to post' });
+        await copyButton.click();
+        console.log(`  [COLLECT] Clicked "Copy link to post"`);
         
-        if (!menuButton) {
-          const buttons = await postContainers[i].$$('button');
-          for (const btn of buttons) {
-            const ariaLabel = await btn.getAttribute('aria-label');
-            if (ariaLabel && (ariaLabel.toLowerCase().includes('more') || ariaLabel.includes('…'))) {
-              menuButton = btn;
-              break;
-            }
-          }
-        }
+        // Wait a moment for clipboard update
+        await new Promise(r => setTimeout(r, 300));
         
-        if (!menuButton) {
-          console.log(`  [DEBUG] Post ${i + 1}: No menu button found, skipping`);
-          continue;
-        }
-        
-        console.log(`  [DEBUG] Post ${i + 1}: Clicking three-dot menu`);
-        await menuButton.click();
-        await page.waitForTimeout(600);
-        
-        const menuItems = await page.$$('[role="menuitem"]');
-        console.log(`  [DEBUG] Post ${i + 1}: Found ${menuItems.length} menu items`);
-        
-        let copyLinkItem = null;
-        for (const item of menuItems) {
-          const text = await item.evaluate(el => el.textContent.trim());
-          console.log(`  [DEBUG] Post ${i + 1}: Menu item: "${text}"`);
-          if (text.toLowerCase().includes('copy link')) {
-            copyLinkItem = item;
-            break;
-          }
-        }
-        
-        if (!copyLinkItem) {
-          console.log(`  [DEBUG] Post ${i + 1}: "Copy link to post" not found, trying alternative selectors`);
-          const allMenuItems = await page.$$('div[role="option"]');
-          for (const item of allMenuItems) {
-            const text = await item.evaluate(el => el.textContent.trim());
-            if (text.toLowerCase().includes('copy link')) {
-              copyLinkItem = item;
-              break;
-            }
-          }
-        }
-        
-        if (!copyLinkItem) {
-          console.log(`  [DEBUG] Post ${i + 1}: "Copy link" option not found, closing menu`);
-          await page.keyboard.press('Escape');
-          continue;
-        }
-        
-        console.log(`  [DEBUG] Post ${i + 1}: Clicking "Copy link to post"`);
-        await copyLinkItem.click();
-        await page.waitForTimeout(800);
-        
-        const clipboardText = await page.evaluate(() => {
+        // Read from clipboard using page context
+        const link = await page.evaluate(() => {
           return navigator.clipboard.readText().catch(() => '');
         });
         
-        if (clipboardText && clipboardText.includes('linkedin.com')) {
-          console.log(`  [DEBUG] Post ${i + 1}: ✓ Copied link: ${clipboardText.substring(0, 60)}`);
+        if (link && link.includes('linkedin.com')) {
           posts.push({
             searchTerm: searchTerm,
-            postUrl: clipboardText,
+            postUrl: link,
           });
+          console.log(`  [COLLECT] ✅ Post ${i + 1}: ${link.substring(0, 75)}`);
         } else {
-          console.log(`  [DEBUG] Post ${i + 1}: Clipboard empty or invalid: "${clipboardText}"`);
+          console.log(`  [COLLECT] ⚠️  Post ${i + 1}: No valid link in clipboard`);
         }
         
+        // Close menu by clicking elsewhere or pressing Escape
         await page.keyboard.press('Escape');
-        await page.waitForTimeout(300);
+        await new Promise(r => setTimeout(r, 300));
         
       } catch (error) {
-        console.log(`  [DEBUG] Post ${i + 1}: Error: ${error.message}`);
+        console.log(`  [COLLECT] ⚠️  Error processing post ${i + 1}: ${error.message}`);
+        // Try to close menu
         try {
           await page.keyboard.press('Escape');
-        } catch (e) {}
+        } catch (e) {
+          // Ignore
+        }
+        continue;
       }
     }
     
-    console.log(`  [DEBUG] Collection complete: ${posts.length} posts collected`);
+    console.log(`  [COLLECT] Successfully collected ${posts.length} posts`);
+    console.log(`  [COLLECT] ========== POST EXTRACTION COMPLETE ==========`);
     
   } catch (error) {
-    console.log(`  [DEBUG] Error during post collection: ${error.message}`);
+    console.error(`  [COLLECT] ❌ Error during post collection: ${error.message}`);
   }
   
   return posts;
 };
 
-export { isPageValid, collectPostsFromPage };
+const capturePageDiagnostics = async (page, searchTerm = 'unknown') => {
+  console.log(`\n[DIAG] 🔍 CAPTURING PAGE DIAGNOSTICS FOR SEARCH: ${searchTerm}`);
+  console.log(`[DIAG] ================================================`);
+  
+  try {
+    // 1. Page title and URL
+    const pageInfo = await page.evaluate(() => ({
+      title: document.title,
+      url: window.location.href,
+      innerHeight: window.innerHeight,
+      innerWidth: window.innerWidth,
+      scrollTop: window.scrollY,
+    }));
+    console.log(`[DIAG] Page URL: ${pageInfo.url}`);
+    console.log(`[DIAG] Page Title: ${pageInfo.title}`);
+    console.log(`[DIAG] Viewport: ${pageInfo.innerWidth}x${pageInfo.innerHeight}, Scroll: ${pageInfo.scrollTop}px`);
+    
+    // 2. Check for filter elements (multiple patterns)
+    const filterInfo = await page.evaluate(() => {
+      const results = {
+        ariaLabelFilter: document.querySelector('a[aria-label*="Filter"]') ? 'FOUND' : 'NOT FOUND',
+        ariaLabelPosts: document.querySelector('a[aria-label="Filter by Posts"]') ? 'FOUND' : 'NOT FOUND',
+        allAnchorTags: document.querySelectorAll('a').length,
+        allWithAriaLabel: document.querySelectorAll('[aria-label*="Filter"]').length,
+        allWithAriaChecked: document.querySelectorAll('[aria-checked]').length,
+      };
+      return results;
+    });
+    console.log(`[DIAG] Filter elements found:`);
+    console.log(`[DIAG]   - a[aria-label*="Filter"]: ${filterInfo.ariaLabelFilter}`);
+    console.log(`[DIAG]   - a[aria-label="Filter by Posts"]: ${filterInfo.ariaLabelPosts}`);
+    console.log(`[DIAG]   - Total <a> tags: ${filterInfo.allAnchorTags}`);
+    console.log(`[DIAG]   - Elements with aria-label containing "Filter": ${filterInfo.allWithAriaLabel}`);
+    
+    // 3. Check for post containers
+    const postContainerInfo = await page.evaluate(() => ({
+      feedUpdate: document.querySelectorAll('[data-testid="feed-update"]').length,
+      articles: document.querySelectorAll('article').length,
+      feedUpdateDiv: document.querySelectorAll('div[data-testid*="feed-update"]').length,
+      allFeedItems: document.querySelectorAll('[data-testid*="update"]').length,
+      feedContainers: document.querySelectorAll('[data-testid*="feed"]').length,
+    }));
+    console.log(`[DIAG] Post container elements found:`);
+    console.log(`[DIAG]   - [data-testid="feed-update"]: ${postContainerInfo.feedUpdate}`);
+    console.log(`[DIAG]   - <article>: ${postContainerInfo.articles}`);
+    console.log(`[DIAG]   - div[data-testid*="feed-update"]: ${postContainerInfo.feedUpdateDiv}`);
+    console.log(`[DIAG]   - [data-testid*="update"]: ${postContainerInfo.allFeedItems}`);
+    console.log(`[DIAG]   - [data-testid*="feed"]: ${postContainerInfo.feedContainers}`);
+    
+    // 4. Sample all data-testid attributes
+    const allDataTestIds = await page.evaluate(() => {
+      const testIds = new Set();
+      document.querySelectorAll('[data-testid]').forEach(el => {
+        testIds.add(el.getAttribute('data-testid'));
+      });
+      return Array.from(testIds).slice(0, 15);
+    });
+    console.log(`[DIAG] Sample data-testid values on page: ${allDataTestIds.join(', ')}`);
+    
+    // 5. Count post URLs found
+    const postUrlCount = await page.evaluate(() => {
+      const links = document.querySelectorAll('a[href*="linkedin.com/feed/update"]');
+      return links.length;
+    });
+    console.log(`[DIAG] Post URLs found (/feed/update/): ${postUrlCount}`);
+    
+    // 6. Take screenshot
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const screenshotPath = `./debug-${searchTerm}-${timestamp}.png`;
+    await page.screenshot({ path: screenshotPath });
+    console.log(`[DIAG] Screenshot saved: ${screenshotPath}`);
+    
+    console.log(`[DIAG] ================================================\n`);
+    
+    return {
+      pageInfo,
+      filterInfo,
+      postContainerInfo,
+      allDataTestIds,
+      postUrlCount,
+      screenshotPath,
+    };
+    
+  } catch (error) {
+    console.error(`[DIAG] ❌ Error capturing diagnostics: ${error.message}`);
+  }
+};
+
+export { isPageValid, collectPostsFromPage, capturePageDiagnostics };
