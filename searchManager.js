@@ -1,6 +1,44 @@
 import { randomDelay } from './scrolling.js';
 import { isPageValid, collectPostsFromPage, capturePageDiagnostics } from './pageUtils.js';
 
+// Helper function to click the "Date posted" filter inside iframe
+const clickDatePostedFilter = async (page, filterLabel = 'Past 24 hours Filter by Past', maxRetries = 3) => {
+  console.log(`\n[FILTER] Attempting to click "Date posted" filter (max ${maxRetries} retries)`);
+
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      console.log(`[FILTER] Date posted retry attempt ${attempt}/${maxRetries}`);
+
+      const iframe = page.frameLocator('[data-testid="interop-iframe"]');
+
+      console.log(`[FILTER] Clicking "Date posted" filter button...`);
+      await iframe.getByRole('button', { name: /Date posted filter/i }).first().click();
+      await page.waitForTimeout(500);
+
+      console.log(`[FILTER] Selecting "${filterLabel}" option...`);
+      await iframe.locator('label').filter({ hasText: filterLabel }).first().click();
+      await page.waitForTimeout(500);
+
+      console.log(`[FILTER] Applying current date filter...`);
+      await iframe.getByRole('button', { name: /Apply current filter to show/i }).first().click();
+
+      await page.waitForTimeout(randomDelay(1500, 2500));
+      console.log(`[FILTER] ✅ Successfully applied "Date posted" filter`);
+      return true;
+    } catch (error) {
+      console.log(`[FILTER] ❌ Date posted attempt ${attempt} failed: ${error.message}`);
+
+      if (attempt < maxRetries) {
+        console.log(`[FILTER] Waiting 2 seconds before retry...`);
+        await page.waitForTimeout(2000);
+      }
+    }
+  }
+
+  console.log(`[FILTER] ⚠️  Failed to apply "Date posted" filter after ${maxRetries} attempts`);
+  return false;
+};
+
 // Helper function to click the "Posts" filter inside iframe
 const clickPostsFilter = async (page, searchQuery = '', maxRetries = 3) => {
   console.log(`\n[FILTER] Attempting to click "Posts" filter (max ${maxRetries} retries)`);
@@ -27,7 +65,8 @@ const clickPostsFilter = async (page, searchQuery = '', maxRetries = 3) => {
       console.log(`[FILTER] ✅ Iframe accessible, finding Posts button...`);
       
       // Find the Posts button inside the iframe using getByRole
-      const postsButton = iframe.getByRole('button', { name: 'Posts' });
+      // Use .first() to avoid strict mode violation when multiple 'Posts' buttons exist
+      const postsButton = iframe.getByRole('button', { name: 'Posts' }).first();
       
       // Wait for button to be visible - increased timeout to 8 seconds
       console.log(`[FILTER] Waiting for Posts button to be visible (up to 8 seconds)...`);
@@ -168,11 +207,36 @@ const performSearch = async (page, searchQuery) => {
     if (!filterClicked) {
       console.warn(`[FILTER] ⚠️  Could not click filter, will attempt collection anyway`);
     }
+
+    // === STEP 5: Click "Date posted" filter and set time range ===
+    const dateFilterClicked = await clickDatePostedFilter(page);
+
+    if (!dateFilterClicked) {
+      console.warn(`[FILTER] ⚠️  Could not apply "Date posted" filter, will attempt collection anyway`);
+    }
     
-    // === STEP 5: Wait for posts to load ===
-    await waitForPostsToLoad(page);
+    // === STEP 6: Wait for posts to load and scroll to trigger dynamic loading ===
+    console.log(`[POSTS] Waiting for posts to appear after filters...`);
     
-    // === STEP 6: Collect posts (exactly 5) ===
+    // Aggressive scrolling inside iframe to load posts
+    const iframe = page.frameLocator('[data-testid="interop-iframe"]');
+    console.log(`[POSTS] Starting aggressive pre-scrolling to load more posts...`);
+    for (let i = 0; i < 15; i++) {
+      try {
+        await iframe.locator('body').evaluate(el => {
+          el.scrollTop += window.innerHeight * 2;
+        });
+        await page.waitForTimeout(1200);
+        console.log(`[POSTS] Pre-scroll attempt ${i + 1}/15`);
+      } catch (e) {
+        // Ignore scroll errors
+      }
+    }
+    
+    await page.waitForTimeout(randomDelay(3000, 4000));
+    console.log(`[POSTS] ✅ Pre-scrolling complete, ready to collect posts`);
+    
+    // === STEP 7: Collect posts (exactly 5) ===
     console.log(`[COLLECT] Collecting posts from search results...`);
     const posts = await collectPostsFromPage(page, searchQuery);
     
@@ -180,11 +244,11 @@ const performSearch = async (page, searchQuery) => {
       collectedPosts.push(...posts);
     }
     
-    // Deduplicate and limit to 5 posts
+    // Deduplicate and limit to 10 posts
     const uniquePosts = Array.from(
       new Map(collectedPosts.map(post => [post.postUrl, post])).values()
     );
-    const selectedPosts = uniquePosts.slice(0, 5);
+    const selectedPosts = uniquePosts.slice(0, 10);
     
     console.log(`[COLLECT] ✅ Found and collected ${selectedPosts.length} posts`);
     

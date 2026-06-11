@@ -1,6 +1,6 @@
 import { chromium } from 'playwright';
 import dotenv from 'dotenv';
-import { appendToSheets, prepareDataForSheets } from './sheetsService.js';
+import { appendToSheets, prepareDataForSheets, getSearchKeywords, removeDuplicates } from './sheetsService.js';
 import { 
   ensureSessionDir, 
   getSessionPath, 
@@ -8,6 +8,12 @@ import {
   saveSession, 
   loadSession 
 } from './sessionManager.js';
+import {
+  createSession,
+  logSessionStart,
+  updateSessionEnd,
+  checkDetectionSignals,
+} from './sessionTracking.js';
 import { randomDelay, scrollDown, scrollUp } from './scrolling.js';
 import { isPageValid } from './pageUtils.js';
 import { performSearch } from './searchManager.js';
@@ -25,8 +31,22 @@ const runLinkedInAutomation = async () => {
   let page;
   let allCollectedPosts = [];
   
+  // Initialize session tracking
+  const automationSession = createSession();
+  let sessionLoggingError = '';
+  automationSession.status = 'running';
+  
   try {
     console.log('Starting LinkedIn Playwright Automation...\n');
+    
+    // Log session start to Google Sheets
+    try {
+      await logSessionStart(automationSession);
+      console.log(`📊 Session ID: ${automationSession.session_id}\n`);
+    } catch (error) {
+      sessionLoggingError = `Failed to log session start: ${error.message}`;
+      console.warn(`⚠️  ${sessionLoggingError}`);
+    }
     
     browser = await chromium.launch({
       headless: HEADLESS,
@@ -38,7 +58,9 @@ const runLinkedInAutomation = async () => {
     
     console.log('Checking for saved session...\n');
     try {
-      context = await browser.newContext();
+      context = await browser.newContext({
+        permissions: ['clipboard-read', 'clipboard-write'],
+      });
       const sessionPath = getSessionPath();
       
       if (fs.existsSync(sessionPath)) {
@@ -73,7 +95,9 @@ const runLinkedInAutomation = async () => {
     if (!sessionLoaded) {
       console.log('Starting login process...\n');
       
-      context = await browser.newContext();
+      context = await browser.newContext({
+        permissions: ['clipboard-read', 'clipboard-write'],
+      });
       page = await context.newPage({
         viewport: { width: 1280, height: 720 },
       });
@@ -113,38 +137,72 @@ const runLinkedInAutomation = async () => {
     
     console.log('Feed scrolling completed\n');
     
-    // Check page validity before first search
-    if (await isPageValid(page)) {
-      const ctoPosts = await performSearch(page, '#cto');
-      allCollectedPosts.push(...ctoPosts);
+    // Get search keywords from Google Sheets
+    let keywords = [];
+    try {
+      keywords = await getSearchKeywords();
+      automationSession.total_keywords = keywords.length;
+      console.log(`\n📋 Found ${keywords.length} keyword(s) to process\n`);
+    } catch (error) {
+      console.error('Failed to fetch keywords, using defaults:', error.message);
+      keywords = ['#cto', '#hiring']; // Fallback to defaults
+      automationSession.total_keywords = keywords.length;
+      automationSession.errors = `Failed to fetch keywords: ${error.message}`;
+    }
+    
+    // Loop through each keyword and perform search
+    for (let i = 0; i < keywords.length; i++) {
+      const keyword = keywords[i];
+      console.log(`\n🔍 Searching for keyword ${i + 1}/${keywords.length}: ${keyword}`);
       
-      console.log('\nReturning to feed...\n');
-      try {
-        await page.goto('https://www.linkedin.com/feed/', { 
-          waitUntil: 'domcontentloaded',
-          timeout: 20000 
-        });
-      } catch (error) {
-        console.error('Error navigating back to feed:', error.message);
-        await page.waitForTimeout(3000);
-      }
-      await page.waitForTimeout(randomDelay(1000, 2000));
-      
-      // Check page validity before second search
       if (await isPageValid(page)) {
-        const hiringPosts = await performSearch(page, '#hiring');
-        allCollectedPosts.push(...hiringPosts);
+        try {
+          const posts = await performSearch(page, keyword);
+          allCollectedPosts.push(...posts);
+          automationSession.total_keywords += 1;
+        } catch (searchError) {
+          console.error(`❌ Error searching for ${keyword}:`, searchError.message);
+          automationSession.detection_flag = checkDetectionSignals(searchError.message, allCollectedPosts.length);
+          if (automationSession.detection_flag) {
+            console.warn('⚠️  DETECTION FLAG TRIGGERED - LinkedIn may have detected bot behavior');
+            automationSession.status = 'detection_suspected';
+            automationSession.errors = `Detection signal at keyword: ${keyword}`;
+            break; // Stop further searches
+          }
+        }
+        
+        // Return to feed before next search (except for last keyword)
+        if (i < keywords.length - 1) {
+          console.log('\nReturning to feed...\n');
+          try {
+            await page.goto('https://www.linkedin.com/feed/', { 
+              waitUntil: 'domcontentloaded',
+              timeout: 20000 
+            });
+          } catch (error) {
+            console.error('Error navigating back to feed:', error.message);
+            await page.waitForTimeout(3000);
+          }
+          await page.waitForTimeout(randomDelay(1000, 2000));
+        }
       } else {
-        console.warn('Page invalid, skipping #hiring search');
+        console.warn(`⚠️  Page invalid, skipping '${keyword}' search`);
       }
-    } else {
-      console.warn('Page invalid after feed scrolling, skipping searches');
     }
     
     if (allCollectedPosts.length > 0) {
       console.log(`\nUploading ${allCollectedPosts.length} posts to Google Sheets...\n`);
-      const dataToUpload = prepareDataForSheets(allCollectedPosts);
-      await appendToSheets(dataToUpload);
+      
+      // Remove duplicate posts before uploading
+      const uniquePosts = await removeDuplicates(allCollectedPosts);
+      
+      if (uniquePosts.length > 0) {
+        const dataToUpload = prepareDataForSheets(uniquePosts);
+        await appendToSheets(dataToUpload);
+        automationSession.total_posts = allCollectedPosts.length;
+      } else {
+        console.log('\n✅ All posts are duplicates - nothing new to upload');
+      }
     } else {
       console.log('\nNo posts collected to upload');
     }
@@ -154,10 +212,37 @@ const runLinkedInAutomation = async () => {
     
   } catch (error) {
     console.error('Error:', error.message);
+    automationSession.status = 'failed';
+    automationSession.errors = error.message;
+    automationSession.detection_flag = checkDetectionSignals(error.message, allCollectedPosts.length);
+    if (automationSession.detection_flag) {
+      console.warn('⚠️  DETECTION FLAG TRIGGERED');
+      automationSession.status = 'detection_suspected';
+    }
   } finally {
     if (browser) {
       await browser.close();
       console.log('\nAutomation completed.\n');
+    }
+    
+    // Set final status if still running
+    if (automationSession.status === 'running') {
+      automationSession.status = 'completed';
+    }
+    
+    // Update session with final results
+    try {
+      await updateSessionEnd(automationSession, {
+        total_keywords: automationSession.total_keywords,
+        total_posts: allCollectedPosts.length,
+        total_leads: 0, // Will be updated manually by user
+        status: automationSession.status,
+        detection_flag: automationSession.detection_flag,
+        errors: automationSession.errors || sessionLoggingError,
+      });
+      console.log(`📊 Session ${automationSession.session_id} finalized in Google Sheets`);
+    } catch (error) {
+      console.error('⚠️  Could not update session:', error.message);
     }
   }
 };
