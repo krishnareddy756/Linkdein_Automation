@@ -21,7 +21,7 @@ dotenv.config();
 
 const EMAIL = process.env.LINKEDIN_EMAIL || 'sampleemail@example.com';
 const PASSWORD = process.env.LINKEDIN_PASSWORD || 'samplepassword';
-const HEADLESS = process.env.HEADLESS === 'false' ? false : true;
+const HEADLESS = process.env.HEADLESS === 'false' ? true : false;
 const SLOW_MO = parseInt(process.env.SLOW_MO || '500');
 
 const runLinkedInAutomation = async () => {
