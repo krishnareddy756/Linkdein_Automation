@@ -3,7 +3,7 @@ import fs from 'fs';
 import dotenv from 'dotenv';
 import { v4 as uuidv4 } from 'uuid';
 
-dotenv.config();
+dotenv.config({ override: false });
 
 // Session Sheet Configuration
 const SESSIONS_SHEET_ID = process.env.SESSIONS_SHEET_ID || 'YOUR_SESSION_SHEET_ID';

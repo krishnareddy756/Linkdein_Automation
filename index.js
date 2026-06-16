@@ -17,7 +17,7 @@ import { isPageValid } from './pageUtils.js';
 import { performSearch } from './searchManager.js';
 import fs from 'fs';
 
-dotenv.config();
+dotenv.config({ override: false });
 
 const EMAIL = process.env.LINKEDIN_EMAIL || 'sampleemail@example.com';
 const PASSWORD = process.env.LINKEDIN_PASSWORD || 'samplepassword';

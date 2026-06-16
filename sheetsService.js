@@ -3,7 +3,7 @@ import fs from 'fs';
 import dotenv from 'dotenv';
 
 // Load environment variables
-dotenv.config();
+dotenv.config({ override: false });
 
 // Google Sheets configuration - TWO SEPARATE SHEETS
 const KEYWORDS_SHEET_ID = process.env.KEYWORDS_SHEET_ID || '1nd2WdchB7Rqw5CblrlV1DpUN99HYR2dznpY7gXYU1q8';
