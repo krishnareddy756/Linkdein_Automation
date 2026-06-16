@@ -2,9 +2,7 @@ import { chromium } from 'playwright';
 import dotenv from 'dotenv';
 import { appendToSheets, prepareDataForSheets, getSearchKeywords, removeDuplicates } from './sheetsService.js';
 import { 
-  ensureSessionDir, 
   getSessionPath, 
-  isSessionValid, 
   saveSession, 
   loadSession 
 } from './sessionManager.js';
@@ -102,24 +100,163 @@ const runLinkedInAutomation = async () => {
         viewport: { width: 1280, height: 720 },
       });
       
-      await page.goto('https://www.linkedin.com/login', {
-        waitUntil: 'domcontentloaded',
-        timeout: 15000,
-      });
-      
-      await page.fill('input[name="session_key"]', EMAIL);
-      await page.waitForTimeout(randomDelay(500, 1000));
-      
-      await page.fill('input[name="session_password"]', PASSWORD);
-      await page.waitForTimeout(randomDelay(500, 1000));
-      
-      await page.click('button[type="submit"]');
-      
+      // Strategy 1: Try home page sign-in button approach (more reliable)
+      console.log('📍 Strategy 1: Using home page sign-in button...');
       try {
-        await page.waitForLoadState('networkidle', { timeout: 30000 });
-        console.log('Successfully logged in\n');
+        await page.goto('https://www.linkedin.com/', {
+          waitUntil: 'domcontentloaded',
+          timeout: 15000,
+        });
+        
+        // Click sign in button
+        console.log('   Clicking sign-in button...');
+        try {
+          await page.locator('[data-test-id="home-hero-sign-in-cta"]').click({ timeout: 5000 });
+        } catch (e) {
+          // Fallback to getByRole
+          console.log('   Fallback: Using getByRole...');
+          await page.getByRole('button', { name: /sign in|log in/i }).first().click();
+        }
+        
+        await page.waitForTimeout(randomDelay(1500, 2500));
+        
+        // Fill email/phone
+        console.log('   Filling email...');
+        try {
+          await page.getByRole('textbox', { name: 'Email or phone' }).fill(EMAIL);
+        } catch (e) {
+          console.log('   Fallback: Using input selector for email...');
+          await page.locator('input[type="text"], input[type="email"]').first().fill(EMAIL);
+        }
+        
+        await page.waitForTimeout(randomDelay(500, 1000));
+        
+        // Fill password
+        console.log('   Filling password...');
+        try {
+          await page.getByRole('textbox', { name: 'Password' }).fill(PASSWORD);
+        } catch (e) {
+          console.log('   Fallback: Using input[type="password"] for password...');
+          await page.locator('input[type="password"]').fill(PASSWORD);
+        }
+        
+        await page.waitForTimeout(randomDelay(500, 1000));
+        
+        // Click sign in button
+        console.log('   Clicking sign in button...');
+        try {
+          await page.getByRole('button', { name: 'Sign in', exact: true }).click();
+        } catch (e) {
+          console.log('   Fallback: Using getByRole for button click...');
+          await page.getByRole('button', { name: /sign in|log in/i }).first().click();
+        }
+        
+        await page.waitForTimeout(2000);
+        
+        try {
+          await page.waitForLoadState('networkidle', { timeout: 20000 });
+          console.log('✅ Successfully logged in via Strategy 1\n');
+        } catch (error) {
+          console.log('⚠️  Network idle timeout, but continuing...');
+        }
+        
       } catch (error) {
-        // Continue
+        console.log(`\n⚠️  Strategy 1 failed: ${error.message}`);
+        console.log('📍 Strategy 2: Using direct login page...');
+        
+        try {
+          await page.goto('https://www.linkedin.com/login', {
+            waitUntil: 'domcontentloaded',
+            timeout: 15000,
+          });
+          
+          // Wait for login form to load
+          await page.waitForTimeout(2000);
+          
+          // Try multiple email/phone input selectors
+          console.log('   Trying to fill email field...');
+          let emailFilled = false;
+          
+          // Try strategy 1: by role
+          try {
+            await page.getByRole('textbox', { name: 'Email or phone' }).fill(EMAIL);
+            emailFilled = true;
+            console.log('   ✅ Email filled (by role)');
+          } catch (e1) {
+            // Try strategy 2: name attribute
+            try {
+              await page.locator('input[name="session_key"]').fill(EMAIL);
+              emailFilled = true;
+              console.log('   ✅ Email filled (by name)');
+            } catch (e2) {
+              // Try strategy 3: type=text
+              try {
+                await page.locator('input[type="text"]').first().fill(EMAIL);
+                emailFilled = true;
+                console.log('   ✅ Email filled (by type)');
+              } catch (e3) {
+                console.log(`   ❌ Could not fill email: ${e3.message}`);
+              }
+            }
+          }
+          
+          if (emailFilled) {
+            await page.waitForTimeout(randomDelay(500, 1000));
+            
+            // Try multiple password input selectors
+            console.log('   Trying to fill password field...');
+            let passwordFilled = false;
+            
+            try {
+              await page.getByRole('textbox', { name: 'Password' }).fill(PASSWORD);
+              passwordFilled = true;
+              console.log('   ✅ Password filled (by role)');
+            } catch (e1) {
+              try {
+                await page.locator('input[name="session_password"]').fill(PASSWORD);
+                passwordFilled = true;
+                console.log('   ✅ Password filled (by name)');
+              } catch (e2) {
+                try {
+                  await page.locator('input[type="password"]').fill(PASSWORD);
+                  passwordFilled = true;
+                  console.log('   ✅ Password filled (by type)');
+                } catch (e3) {
+                  console.log(`   ❌ Could not fill password: ${e3.message}`);
+                }
+              }
+            }
+            
+            if (passwordFilled) {
+              await page.waitForTimeout(randomDelay(500, 1000));
+              
+              // Click sign in
+              console.log('   Clicking sign in button...');
+              try {
+                await page.getByRole('button', { name: 'Sign in' }).click();
+              } catch (e1) {
+                try {
+                  await page.locator('button[type="submit"]').click();
+                } catch (e2) {
+                  await page.getByRole('button', { name: /log in|sign in/i }).first().click();
+                }
+              }
+              
+              try {
+                await page.waitForLoadState('networkidle', { timeout: 20000 });
+                console.log('✅ Successfully logged in via Strategy 2\n');
+              } catch (error) {
+                console.log('⚠️  Network idle timeout, but continuing...');
+              }
+            } else {
+              throw new Error('Could not fill password field with any strategy');
+            }
+          } else {
+            throw new Error('Could not fill email field with any strategy');
+          }
+        } catch (strategyError) {
+          console.error(`❌ All login strategies failed: ${strategyError.message}\n`);
+        }
       }
       
       await saveSession(page);

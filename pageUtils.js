@@ -9,148 +9,104 @@ const isPageValid = async (page) => {
 
 const collectPostsFromPage = async (page, searchTerm) => {
   const posts = [];
-  
+
   try {
     console.log(`  [COLLECT] ========== POST EXTRACTION START ==========`);
     console.log(`  [COLLECT] Search term: ${searchTerm}`);
-    console.log(`  [COLLECT] Using "Copy link to post" method...`);
-    
-    // Get the iframe
-    const iframe = page.frameLocator('[data-testid="interop-iframe"]');
-    
-    // Scroll inside iframe to load more posts - loop until we find 10 or reach end
-    console.log(`  [COLLECT] Scrolling inside iframe to load posts...`);
+    console.log(`  [COLLECT] Using "Open control menu" → "Copy link to post" method...`);
+
+    // Scroll the page to load more posts before collecting (target: 20)
+    console.log(`  [COLLECT] Scrolling page to load posts (target: 20)...`);
     let previousCount = 0;
     let sameCountAttempts = 0;
-    
-    for (let scrollAttempt = 0; scrollAttempt < 35; scrollAttempt++) {
-      try {
-        // Scroll to bottom with larger increments
-        const scrollableArea = iframe.locator('[role="region"], [class*="scroll"], body');
-        await scrollableArea.first().evaluate(el => {
-          el.scrollTop = el.scrollHeight + 500;
-        });
-        
-        // Wait for new posts to load
-        await new Promise(r => setTimeout(r, 1500));
-        
-        // Check current post count
-        const currentPostMenuButtons = await iframe.locator('button[aria-label*="Open control menu"]').count();
-        console.log(`  [COLLECT] Scroll attempt ${scrollAttempt + 1}: Found ${currentPostMenuButtons} posts`);
-        
-        // If we have 10+ posts or reached the end, stop scrolling
-        if (currentPostMenuButtons >= 10) {
-          console.log(`  [COLLECT] ✅ Found 10+ posts, stopping scroll`);
-          break;
-        }
-        
-        // If post count didn't change after 2 attempts (instead of 3), we've likely reached the end
-        if (currentPostMenuButtons === previousCount) {
-          sameCountAttempts++;
-          if (sameCountAttempts >= 2) {
-            console.log(`  [COLLECT] ⚠️  No new posts loaded after 2 attempts, reached end (found ${currentPostMenuButtons} posts)`);
-            break;
-          }
-        } else {
-          sameCountAttempts = 0;
-        }
-        
-        previousCount = currentPostMenuButtons;
-        
-      } catch (e) {
-        console.log(`  [COLLECT] Error during scroll: ${e.message}`);
+
+    for (let scrollAttempt = 0; scrollAttempt < 30; scrollAttempt++) {
+      await page.evaluate(() => window.scrollBy(0, window.innerHeight * 2));
+      await new Promise(r => setTimeout(r, 1500));
+
+      const currentCount = await page.locator('button[aria-label*="Open control menu"]').count();
+      console.log(`  [COLLECT] Scroll ${scrollAttempt + 1}: ${currentCount} posts visible`);
+
+      if (currentCount >= 20) {
+        console.log(`  [COLLECT] ✅ 20+ posts loaded, stopping scroll`);
         break;
       }
+
+      if (currentCount === previousCount) {
+        sameCountAttempts++;
+        if (sameCountAttempts >= 3) {
+          console.log(`  [COLLECT] ⚠️  No new posts after 3 attempts, reached end (${currentCount} posts)`);
+          break;
+        }
+      } else {
+        sameCountAttempts = 0;
+      }
+
+      previousCount = currentCount;
     }
-    
-    // Find all post containers in iframe
-    console.log(`  [COLLECT] Finding post control menu buttons...`);
-    const postMenuButtons = await iframe.locator('button[aria-label*="Open control menu"]').all();
-    console.log(`  [COLLECT] Found ${postMenuButtons.length} posts with control menus`);
-    
-    // Limit to 10 posts
-    const postsToCollect = Math.min(postMenuButtons.length, 10);
-    console.log(`  [COLLECT] Collecting ${postsToCollect} posts (limit: 10)`);
-    
+
+    // Count available posts
+    const totalButtons = await page.locator('button[aria-label*="Open control menu"]').count();
+    const postsToCollect = Math.min(totalButtons, 20);
+    console.log(`  [COLLECT] Found ${totalButtons} posts, collecting up to ${postsToCollect}`);
+
     for (let i = 0; i < postsToCollect; i++) {
       try {
         console.log(`  [COLLECT] Processing post ${i + 1}/${postsToCollect}...`);
-        
-        // Get the button again (fresh reference)
-        const postMenuBtn = await iframe.locator('button[aria-label*="Open control menu"]').nth(i);
-        
-        // Scroll into view
-        await postMenuBtn.scrollIntoViewIfNeeded();
+
+        // Fresh reference each iteration — DOM may shift after scrolling
+        const menuBtn = page.locator('button[aria-label*="Open control menu"]').nth(i);
+        await menuBtn.scrollIntoViewIfNeeded();
+        await new Promise(r => setTimeout(r, 400));
+
+        // Open the post's control menu
+        await menuBtn.click();
         await new Promise(r => setTimeout(r, 500));
-        
-        // Click the control menu button
-        await postMenuBtn.click();
-        await new Promise(r => setTimeout(r, 500));
-        
-        // Click "Copy link to post" button
-        const copyButton = iframe.getByRole('button', { name: 'Copy link to post' });
-        await copyButton.click();
+
+        // Click "Copy link to post" — recorded as getByText in the Inspector
+        const copyOption = page.getByText('Copy link to post').first();
+        await copyOption.waitFor({ state: 'visible', timeout: 3000 });
+        await copyOption.click();
         console.log(`  [COLLECT] Clicked "Copy link to post"`);
-        
-        // Wait a moment for clipboard update
-        await new Promise(r => setTimeout(r, 300));
-        
-        // Read from clipboard using page context
-        const link = await page.evaluate(() => {
-          return navigator.clipboard.readText().catch(() => '');
-        });
-        
+
+        await new Promise(r => setTimeout(r, 400));
+
+        // Read from clipboard
+        const link = await page.evaluate(() =>
+          navigator.clipboard.readText().catch(() => '')
+        );
+
         if (link && link.includes('linkedin.com')) {
-          posts.push({
-            searchTerm: searchTerm,
-            postUrl: link,
-          });
+          posts.push({ searchTerm, postUrl: link });
           console.log(`  [COLLECT] ✅ Post ${i + 1}: ${link.substring(0, 75)}`);
         } else {
-          console.log(`  [COLLECT] ⚠️  Post ${i + 1}: No valid link in clipboard`);
+          console.log(`  [COLLECT] ⚠️  Post ${i + 1}: clipboard empty or non-LinkedIn URL`);
         }
-        
-        // Close menu by clicking elsewhere or pressing Escape
+
+        // Dismiss the menu
         await page.keyboard.press('Escape');
         await new Promise(r => setTimeout(r, 300));
-        
-        // === SCROLL TO LOAD MORE POSTS ===
-        // Scroll down to trigger loading of next posts
+
+        // Light scroll to keep the next post in view
         if (i < postsToCollect - 1) {
-          console.log(`  [COLLECT] Scrolling to load more posts...`);
-          for (let scrollCount = 0; scrollCount < 3; scrollCount++) {
-            try {
-              const scrollableArea = iframe.locator('[role="region"], [class*="scroll"], body');
-              await scrollableArea.first().evaluate(el => {
-                el.scrollTop += window.innerHeight * 1.5;
-              });
-              await new Promise(r => setTimeout(r, 600));
-              console.log(`  [COLLECT]   └─ Scroll ${scrollCount + 1}/3`);
-            } catch (e) {
-              // Ignore scroll errors
-            }
-          }
+          await page.evaluate(() => window.scrollBy(0, window.innerHeight));
+          await new Promise(r => setTimeout(r, 600));
         }
-        
+
       } catch (error) {
-        console.log(`  [COLLECT] ⚠️  Error processing post ${i + 1}: ${error.message}`);
-        // Try to close menu
-        try {
-          await page.keyboard.press('Escape');
-        } catch (e) {
-          // Ignore
-        }
+        console.log(`  [COLLECT] ⚠️  Error on post ${i + 1}: ${error.message}`);
+        try { await page.keyboard.press('Escape'); } catch (_) {}
         continue;
       }
     }
-    
-    console.log(`  [COLLECT] Successfully collected ${posts.length} posts`);
+
+    console.log(`  [COLLECT] Collected ${posts.length} post(s)`);
     console.log(`  [COLLECT] ========== POST EXTRACTION COMPLETE ==========`);
-    
+
   } catch (error) {
-    console.error(`  [COLLECT] ❌ Error during post collection: ${error.message}`);
+    console.error(`  [COLLECT] ❌ Fatal error during collection: ${error.message}`);
   }
-  
+
   return posts;
 };
 
