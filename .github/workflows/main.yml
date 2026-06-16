@@ -1,0 +1,38 @@
+# .github/workflows/linkedin-automation.yml
+name: LinkedIn Automation
+
+on:
+  # Manual trigger from the GitHub UI
+  workflow_dispatch:
+  
+  # Cron: runs every day at 8am UTC
+  schedule:
+    - cron: '0 8 * * *'
+
+jobs:
+  run-automation:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      
+      - name: Install dependencies
+        run: npm install
+      
+      - name: Install Playwright browsers
+        run: npx playwright install chromium --with-deps
+      
+      - name: Run automation
+        env:
+          LINKEDIN_EMAIL: ${{ secrets.LINKEDIN_EMAIL }}
+          LINKEDIN_PASSWORD: ${{ secrets.LINKEDIN_PASSWORD }}
+          HEADLESS: 'true'
+          SLOW_MO: '0'
+          KEYWORDS_SHEET_ID: ${{ secrets.KEYWORDS_SHEET_ID }}
+          POSTS_SHEET_ID: ${{ secrets.POSTS_SHEET_ID }}
+          SESSIONS_SHEET_ID: ${{ secrets.SESSIONS_SHEET_ID }}
+        run: node index.js
