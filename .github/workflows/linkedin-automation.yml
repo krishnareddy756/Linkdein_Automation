@@ -1,0 +1,49 @@
+name: LinkedIn Automation
+
+on:
+  # Manual trigger from the GitHub Actions UI
+  workflow_dispatch:
+
+  # Cron: runs every day at 8am UTC (adjust as needed)
+  # Format: minute hour day-of-month month day-of-week
+  schedule:
+    - cron: '0 8 * * *'
+
+jobs:
+  run-automation:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Install Playwright browsers
+        run: npx playwright install chromium --with-deps
+
+      - name: Write credentials.json from secret
+        run: |
+          echo "${{ secrets.GOOGLE_CREDENTIALS_B64 }}" | base64 --decode > credentials.json
+
+      - name: Run automation
+        env:
+          LINKEDIN_EMAIL: ${{ secrets.LINKEDIN_EMAIL }}
+          LINKEDIN_PASSWORD: ${{ secrets.LINKEDIN_PASSWORD }}
+          HEADLESS: 'true'
+          SLOW_MO: '0'
+          KEYWORDS_SHEET_ID: ${{ secrets.KEYWORDS_SHEET_ID }}
+          KEYWORDS_SHEET_NAME: ${{ secrets.KEYWORDS_SHEET_NAME }}
+          POSTS_SHEET_ID: ${{ secrets.POSTS_SHEET_ID }}
+          POSTS_SHEET_NAME: ${{ secrets.POSTS_SHEET_NAME }}
+          SESSIONS_SHEET_ID: ${{ secrets.SESSIONS_SHEET_ID }}
+          SESSIONS_SHEET_NAME: ${{ secrets.SESSIONS_SHEET_NAME }}
+          SESSION_DIR: './sessions'
+          SESSION_EXPIRY_HOURS: '24'
+        run: node index.js
