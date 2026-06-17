@@ -261,7 +261,33 @@ const runLinkedInAutomation = async () => {
       
       await saveSession(page);
     }
-    
+
+    // Verify we actually landed on the feed after login
+    const currentUrl = page.url();
+    console.log(`\n🔗 Current URL after login: ${currentUrl}`);
+    if (!currentUrl.includes('linkedin.com/feed') && !currentUrl.includes('linkedin.com/in/')) {
+      console.warn(`⚠️  WARNING: Not on feed page. LinkedIn may have triggered a checkpoint or CAPTCHA.`);
+      console.warn(`⚠️  URL: ${currentUrl} — search bar will not be available.`);
+      // Navigate explicitly to feed as a recovery attempt
+      try {
+        await page.goto('https://www.linkedin.com/feed/', {
+          waitUntil: 'domcontentloaded',
+          timeout: 15000,
+        });
+        await page.waitForTimeout(3000);
+        const recoveredUrl = page.url();
+        console.log(`🔗 After recovery navigation: ${recoveredUrl}`);
+        if (!recoveredUrl.includes('linkedin.com/feed')) {
+          throw new Error(`Login blocked by LinkedIn. Current page: ${recoveredUrl}`);
+        }
+        console.log('✅ Recovery navigation to feed successful');
+      } catch (navError) {
+        throw new Error(`Cannot proceed - LinkedIn blocked the session: ${navError.message}`);
+      }
+    } else {
+      console.log('✅ Confirmed on LinkedIn feed\n');
+    }
+
     await page.waitForTimeout(randomDelay(2000, 3000));
     
     const randomScrollDownCount = Math.floor(Math.random() * 3) + 3;
